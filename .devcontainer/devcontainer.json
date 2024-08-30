@@ -1,0 +1,613 @@
+{Absolutely! Let's integrate the dialog scripts and creative finance offers into the AI-driven application while utilizing the best open-source AI agents. We'll ensure these scripts include humorous and engaging dialogues, as well as creative finance options. Here's how you can create a comprehensive, open-source, AI-driven cold calling application.
+
+### **Overview:**
+1. **Database:** SQLite
+2. **Backend Framework:** Flask (Python)
+3. **NLP Engine:** Rasa (Open Source)
+4. **Voice Conversion:**
+   - **Speech-to-Text:** Vosk
+   - **Text-to-Speech:** eSpeak
+5. **Frontend:** Vue.js
+
+### **File Structure:**
+```plaintext
+/ai-cold-calling-app
+├── /client
+│   ├── /src
+│   │   ├── /components
+│   │   ├── App.vue
+│   │   ├── main.js
+│   │   └── ...
+│   └── package.json
+├── /server
+│   ├── /models
+│   │   ├── conversation.py
+│   │   ├── lead.py
+│   │   └── ...
+│   ├── /routes
+│   │   ├── conversation_routes.py
+│   │   ├── lead_routes.py
+│   │   └── ...
+│   ├── /utils
+│   │   ├── rasa_connector.py
+│   │   ├── vosk.py
+│   │   ├── espeak.py
+│   │   └── ...
+│   ├── app.py
+│   ├── config.py
+│   └── requirements.txt
+├── /rasa
+│   ├── /data
+│   │   └── nlu.yml
+│   ├── /models
+│   ├── /actions
+│   │   └── actions.py
+│   ├── config.yml
+│   ├── domain.yml
+│   ├── endpoints.yml
+│   └── credentials.yml
+├── README.md
+└── .gitignore
+```
+
+### **Backend Code:**
+
+#### **`/server/requirements.txt`**
+```plaintext
+Flask==2.0.1
+SQLAlchemy==1.4.17
+rasa==2.8.1
+Vosk==0.3.32
+```
+
+#### **`/server/config.py`**
+```python
+import os
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(BASE_DIR, 'app.db')
+SQLALCHEMY_TRACK_MODIFICATIONS = False
+```
+
+#### **`/server/app.py`**
+```python
+from flask import Flask, jsonify
+from flask_sqlalchemy import SQLAlchemy
+
+app = Flask(__name__)
+app.config.from_object('config')
+db = SQLAlchemy(app)
+
+# Import routes
+from routes.lead_routes import lead_blueprint
+from routes.conversation_routes import conversation_blueprint
+
+app.register_blueprint(lead_blueprint)
+app.register_blueprint(conversation_blueprint)
+
+if __name__ == "__main__":
+    db.create_all()
+    app.run(debug=True)
+```
+
+#### **`/server/models/lead.py`**
+```python
+from app import db
+
+class Lead(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='new')
+    notes = db.Column(db.String(200))
+
+    def __repr__(self):
+        return f'<Lead {self.name}>'
+```
+
+#### **`/server/models/conversation.py`**
+```python
+from app import db
+
+class Conversation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    lead_id = db.Column(db.Integer, db.ForeignKey('lead.id'), nullable=False)
+    messages = db.Column(db.PickleType)
+    status = db.Column(db.String(20), default='in-progress')
+
+    def __repr__(self):
+        return f'<Conversation {self.id}>'
+```
+
+#### **`/server/routes/lead_routes.py`**
+```python
+from flask import Blueprint, request, jsonify
+from models.lead import Lead
+from app import db
+
+lead_blueprint = Blueprint('lead_blueprint', __name__)
+
+@lead_blueprint.route('/api/leads', methods=['POST'])
+def create_lead():
+    data = request.get_json()
+    new_lead = Lead(name=data['name'], phone=data['phone'])
+    db.session.add(new_lead)
+    db.session.commit()
+    return jsonify(new_lead.id), 201
+
+@lead_blueprint.route('/api/leads', methods=['GET'])
+def get_leads():
+    leads = Lead.query.all()
+    return jsonify([lead.name for lead in leads])
+```
+
+#### **`/server/routes/conversation_routes.py`**
+```python
+from flask import Blueprint, request, jsonify
+from models.conversation import Conversation
+from models.lead import Lead
+from app import db
+from utils.rasa_connector import get_rasa_response
+from utils.vosk import speech_to_text
+from utils.espeak import text_to_speech
+
+conversation_blueprint = Blueprint('conversation_blueprint', __name__)
+
+@conversation_blueprint.route('/api/conversations/start', methods=['POST'])
+def start_conversation():
+    data = request.get_json()
+    lead = Lead.query.get(data['lead_id'])
+    initial_message = f"Hi {lead.name}, this is [Your Assistant’s Name]! Let's discuss your property."
+
+    conversation = Conversation(lead_id=lead.id, messages=[initial_message])
+    db.session.add(conversation)
+    db.session.commit()
+
+    audio_response = text_to_speech(initial_message)
+    return jsonify(audio_response.decode('utf-8')), 201
+
+@conversation_blueprint.route('/api/conversations/message', methods=['POST'])
+def handle_incoming_message():
+    data = request.get_json()
+    conversation = Conversation.query.filter_by(lead_id=data['lead_id']).first()
+    conversation.messages.append(data['message'])
+    db.session.commit()
+
+    response = get_rasa_response(data['message'])
+    speech_response = text_to_speech(response)
+    
+    return jsonify(speech_response.decode('utf-8')), 200
+```
+
+#### **`/server/utils/rasa_connector.py`**
+```python
+import requests
+
+def get_rasa_response(message):
+    url = 'http://localhost:5005/webhooks/rest/webhook'
+    payload = {'sender': 'user', 'message': message}
+    response = requests.post(url, json=payload)
+    return response.json()[0]['text']
+```
+
+#### **`/server/utils/vosk.py`**
+```python
+import os
+from vosk import Model, KaldiRecognizer
+import wave
+
+model_path = "model"
+if not os.path.exists(model_path):
+    print ("Please download the model from https://alphacephei.com/vosk/models and unpack as 'model' in the current folder.")
+    exit (1)
+
+model = Model(model_path)
+
+def speech_to_text(audio_path):
+    wf = wave.open(audio_path, "rb")
+    rec = KaldiRecognizer(model, wf.getframerate())
+    rec.SetWords(True)
+    text = ""
+
+    while True:
+        data = wf.readframes(4000)
+        if len(data) == 0:
+            break
+        if rec.AcceptWaveform(data):
+            result = rec.Result()
+            text += result['text']
+    final_result = rec.FinalResult()
+    text += final_result['text']
+    
+    return text
+```
+
+#### **`/server/utils/espeak.py`**
+```python
+import subprocess
+
+def text_to_speech(text):
+    command = ['espeak', '-w', 'output.wav', text]
+    subprocess.run(command)
+    with open('output.wav', 'rb') as f:
+        audio_data = f.read()
+    return audio_data
+```
+
+### **Rasa Configuration:**
+
+#### **`/rasa/config.yml`**
+```yaml
+language: en
+pipeline:
+  - name: WhitespaceTokenizer
+  - name: LexicalSyntacticFeaturizer
+  - name: CountVectorsFeaturizer
+  - name: DIETClassifier
+  - name: EntitySynonymMapper
+  - name: ResponseSelector
+  - name: FallbackClassifier
+policies:
+  - name: MemoizationPolicy
+  - name: TEDPolicy
+  - name: RulePolicy
+```
+
+#### **`/rasa/domain.yml`**
+```yaml
+intents:
+  - greet
+  - goodbye
+  - affirm
+  - deny
+  - mood_great
+  - mood_unhappy
+  - creative_finance
+
+responses:
+  utter_greet:
+    - text: "Hello! How can I assist you today?"
+
+  utter_goodbye:
+    - text: "Goodbye! Have a great day!"
+
+  utter_affirm:
+    - text: "Great! Let's proceed."
+
+  utter_deny:
+    - text: "No worries. How can I assist you further?"
+
+  utter_mood_great:
+    - text: "That's great to hear!"
+
+  utter_mood_unhappy:
+    - text: "I'm sorry to hear that. How can I help?"
+
+  utter_creative_finance:
+    - text: >
+        Here are some creative financing options:
+        1. Seller Financing: You act as the lender, and the buyer makes payments to you directly.
+        2. Lease Option: Lease the property with an option to buy. It's like a test drive for homeownership.
+        3. Subject-To: The buyer takes over the existing mortgage while the deed transfers to them.
+        4. Wraparound Mortgage: You keep your existing mortgage while creating a new one designed to wrap around it.
+
+actions:
+  - utter_greet
+  - utter_goodbye
+  - utter_affirm
+  - utter_deny
+  - utter_mood_great
+  - utter_mood_unhappy
+  - utter_creative_finance
+```
+
+#### **`/rasa/data/nlu.yml`**
+```yaml
+version: "2.0"
+nlu:
+- intent: greet
+  examples: |
+    - hey
+    - hello
+    - hi
+    - good morning
+    - good evening
+    - hey there
+
+- intent: goodbye
+  examples: |
+    - bye
+    - goodbye
+    - see you later
+    - have a good one
+
+- intent: affirm
+  examples: |
+    - yes
+    - indeed
+    - of course
+    - that sounds good
+    - correct
+
+- intent: deny
+  examples: |
+    - no
+    - never
+    - I don't think so
+    - don't like that
+    - no way
+
+- intent: mood_great
+  examples: |
+    - perfect
+    - great
+    - wonderful
+    - I feel good
+    - Amazing
+
+- intent: mood_unhappy
+  examples: |
+    - sad
+    - depressed
+    - unhappy
+    - I am not feeling well
+    - miserable
+    - not great
+
+- intent: creative_finance
+  examples: |
+    - Can you explain creative financing options?
+    - What are some creative finance methods?
+    - Tell me about seller financing
+    - Lease option?
+    - How does subject-to work?
+```
+
+#### **`/rasa/actions/actions.py`**
+```python
+# This file is for custom actions for Rasa, if needed
+```
+
+#### **`/rasa/endpoints.yml`**
+```yaml
+action_endpoint:
+  url: "http://localhost:5055/webhook"
+```
+
+#### **`/rasa/credentials.yml`**
+```yaml
+rest:
+```
+
+### **Frontend Code:**
+
+#### **`/client/package.json`**
+```json
+{
+  "name": "ai-cold-calling-client",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^0.21.1",
+    "vue": "^3.0.0",
+    "vue-router": "^4.0.0"
+  },
+  "scripts": {
+    "serve": "vue-cli-service serve",
+    "build": "vue-cli-service build"
+  }
+}
+```
+
+#### **`/client/src/main.js`**
+```js
+import { createApp } from 'vue'
+import App from './App.vue'
+import router from './router'
+
+createApp(App).use(router).mount('#app')
+```
+
+#### **`/client/src/App.vue`**
+```vue
+<template>
+  <div id="app">
+    <router-view/>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'App'
+}
+</script>
+
+<style>
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-align: center;
+  color: #2c3e50;
+  margin-top: 60px;
+}
+</style>
+```
+
+#### **`/client/src/router/index.js`**
+```js
+import { createRouter, createWebHistory } from 'vue-router'
+import Home from '../components/Home.vue'
+import LeadDetail from '../components/LeadDetail.vue'
+
+const routes = [
+  { path: '/', name: 'Home', component: Home },
+  { path: '/lead/:id', name: 'LeadDetail', component: LeadDetail, props: true }
+]
+
+const router = createRouter({
+  history: createWebHistory(process.env.BASE_URL),
+  routes
+})
+
+export default router
+```
+
+#### **`/client/src/components/Home.vue`**
+```vue
+<template>
+  <div>
+    <h1>AI Cold Calling Virtual Call Center</h1>
+    <form @submit.prevent="addLead">
+      <label for="name">Name:</label>
+      <input id="name" v-model="newLead.name" />
+      <label for="phone">Phone:</label>
+      <input id="phone" v-model="newLead.phone" />
+      <button type="submit">Add Lead</button>
+    </form>
+    <h2>Leads</h2>
+    <ul>
+      <li v-for="lead in leads" :key="lead.id">
+        <router-link :to="{ name: 'LeadDetail', params: { id: lead.id } }">{{ lead.name }} ({{ lead.phone }})</router-link>
+      </li>
+    </ul>
+  </div>
+</template>
+
+<script>
+import axios from 'axios'
+
+export default {
+  data() {
+    return {
+      leads: [],
+      newLead: {
+        name: '',
+        phone: ''
+      }
+    }
+  },
+  created() {
+    this.fetchLeads()
+  },
+  methods: {
+    fetchLeads() {
+      axios.get('/api/leads')
+        .then(response => {
+          this.leads = response.data
+        })
+        .catch(error => {
+          console.error('Error fetching leads:', error)
+        })
+    },
+    addLead() {
+      axios.post('/api/leads', this.newLead)
+        .then(() => {
+          this.fetchLeads()
+          this.newLead.name = ''
+          this.newLead.phone = ''
+        })
+        .catch(error => {
+          console.error('Error adding lead:', error)
+        })
+    }
+  }
+}
+</script>
+```
+
+#### **`/client/src/components/LeadDetail.vue`**
+```vue
+<template>
+  <div>
+    <h1>Lead Details</h1>
+    <p>Name: {{ lead.name }}</p>
+    <p>Phone: {{ lead.phone }}</p>
+    <h2>Conversation</h2>
+    <ul>
+      <li v-for="message in lead.messages" :key="message">{{ message }}</li>
+    </ul>
+    <form @submit.prevent="sendMessage">
+      <input v-model="newMessage" />
+      <button type="submit">Send Message</button>
+    </form>
+  </div>
+</template>
+
+<script>
+import axios from 'axios'
+
+export default {
+  props: ['id'],
+  data() {
+    return {
+      lead: null,
+      newMessage: ''
+    }
+  },
+  created() {
+    this.fetchLead()
+  },
+  methods: {
+    fetchLead() {
+      axios.get(`/api/leads/${this.id}`)
+        .then(response => {
+          this.lead = response.data
+        })
+        .catch(error => {
+          console.error('Error fetching lead:', error)
+        })
+    },
+    sendMessage() {
+      axios.post('/api/conversations/message', { lead_id: this.id, message: this.newMessage })
+        .then(() => {
+          this.fetchLead()
+          this.newMessage = ''
+        })
+        .catch(error => {
+          console.error('Error sending message:', error)
+        })
+    }
+  }
+}
+</script>
+```
+
+### **Setup and Run the Application:**
+
+1. **Clone the Repository:**
+   ```sh
+   git clone https://github.com/your-username/ai-cold-calling-app.git
+   cd ai-cold-calling-app
+   ```
+
+2. **Set Up the Backend:**
+   ```sh
+   cd server
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   python app.py
+   ```
+
+3. **Set Up Rasa:**
+   ```sh
+   cd rasa
+   rasa train
+   rasa run -m models --enable-api --cors "*" --debug
+   ```
+
+4. **Set Up the Frontend:**
+   ```sh
+   cd ../client
+   npm install
+   npm run serve
+   ```
+
+This structure provides a complete open-source solution with no reliance on paid APIs, making it easy to set up and run. Just ensure to download and place the required models for Vosk and configure the Rasa server appropriately.
+
+Feel free to reach out if you need more detailed instructions or further assistance!
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+  }
+}
